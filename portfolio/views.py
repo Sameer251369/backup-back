@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Count
 from .models import Brand, Vehicle
@@ -13,6 +14,18 @@ from .serializers import (
     VehicleAdminWorklistSerializer,
     VehicleAdminCreateSerializer,
 )
+
+
+class VehiclePagination(PageNumberPagination):
+    page_size = 12
+    page_size_query_param = 'page_size'
+    max_page_size = 1000
+
+    def get_page_size(self, request):
+        page_size = request.query_params.get(self.page_size_query_param)
+        if page_size == 'all':
+            return self.max_page_size
+        return super().get_page_size(request)
 
 
 class BrandViewSet(viewsets.ReadOnlyModelViewSet):
@@ -27,23 +40,12 @@ class VehicleViewSet(viewsets.ReadOnlyModelViewSet):
         is_active=True
     ).select_related('brand').prefetch_related('images', 'variants')
     lookup_field = 'slug'
+    pagination_class = VehiclePagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['brand__slug', 'body_type', 'fuel_type', 'ev_hybrid_cng_flag', 'is_featured', 'is_tba']
     search_fields = ['name', 'brand__name', 'key_specs', 'transmission']
     ordering_fields = ['ex_showroom_price', 'starting_price', 'created_at', 'name']
     ordering = ['-is_featured', 'brand__name', 'name']
-
-    def paginate_queryset(self, queryset):
-        page_size = self.request.query_params.get('page_size')
-        if page_size:
-            try:
-                if page_size == 'all':
-                    self.paginator.page_size = 1000
-                elif page_size.isdigit():
-                    self.paginator.page_size = max(1, min(int(page_size), 1000))
-            except AttributeError:
-                pass
-        return super().paginate_queryset(queryset)
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
