@@ -13,6 +13,7 @@ from .serializers import (
     VehicleDetailSerializer,
     VehicleAdminWorklistSerializer,
     VehicleAdminCreateSerializer,
+    VehicleAdminUpdateSerializer,
 )
 
 
@@ -42,7 +43,7 @@ class VehicleViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = 'slug'
     pagination_class = VehiclePagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['brand__slug', 'body_type', 'fuel_type', 'ev_hybrid_cng_flag', 'is_featured', 'is_tba']
+    filterset_fields = ['brand', 'brand__id', 'brand__slug', 'body_type', 'fuel_type', 'ev_hybrid_cng_flag', 'is_featured', 'is_tba']
     search_fields = ['name', 'brand__name', 'key_specs', 'transmission']
     ordering_fields = ['ex_showroom_price', 'starting_price', 'created_at', 'name']
     ordering = ['-is_featured', 'brand__name', 'name']
@@ -76,13 +77,13 @@ class VehicleViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class AdminVehicleWorklistViewSet(viewsets.ModelViewSet):
-    """Admin endpoint for reviewing and publishing vehicles."""
-    queryset = Vehicle.objects.filter(needs_review=True).select_related('brand').order_by('brand__name', 'name')
+    """Admin endpoint for listing, reviewing, creating, and updating vehicles."""
+    queryset = Vehicle.objects.all().select_related('brand').prefetch_related('images').order_by('-created_at', 'brand__name', 'name')
     serializer_class = VehicleAdminWorklistSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['brand__slug', 'is_active', 'body_type', 'fuel_type']
+    filterset_fields = ['brand__slug', 'is_active', 'body_type', 'fuel_type', 'data_source', 'needs_review']
     search_fields = ['name', 'brand__name', 'transmission']
     ordering_fields = ['created_at', 'name', 'starting_price']
     ordering = ['-created_at']
@@ -91,11 +92,20 @@ class AdminVehicleWorklistViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if self.action == 'create':
             return Vehicle.objects.none()
-        return super().get_queryset()
+        qs = Vehicle.objects.filter(data_source='manual').select_related('brand').prefetch_related('images').order_by('-created_at')
+        params = self.request.query_params
+        if 'needs_review' in params:
+            val = params['needs_review'].lower() in ('true', '1', 'yes')
+            qs = qs.filter(needs_review=val)
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'create':
             return VehicleAdminCreateSerializer
+        if self.action in ('update', 'partial_update'):
+            return VehicleAdminUpdateSerializer
+        if self.action == 'retrieve':
+            return VehicleDetailSerializer
         return VehicleAdminWorklistSerializer
 
     def create(self, request, *args, **kwargs):
@@ -108,11 +118,24 @@ class AdminVehicleWorklistViewSet(viewsets.ModelViewSet):
             'vehicle': output.data,
         }, status=status.HTTP_201_CREATED)
 
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        vehicle = serializer.save()
+        output = VehicleAdminWorklistSerializer(vehicle, context={'request': request})
+        return Response({
+            'message': 'Vehicle updated successfully.',
+            'vehicle': output.data,
+        })
+
     @action(detail=False, methods=['get'], url_path='needs-review')
     def needs_review(self, request):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
+        queryset = self.get_queryset().filter(needs_review=True)
+        serializer = VehicleAdminWorklistSerializer(queryset, many=True, context={'request': request})
         return Response({
             'count': queryset.count(),
             'results': serializer.data,
         })
+
