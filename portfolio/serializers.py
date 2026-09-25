@@ -1,3 +1,6 @@
+from decimal import Decimal, InvalidOperation
+
+from django.db import transaction
 from rest_framework import serializers
 from .models import Brand, Vehicle, VehicleVariant, VehicleImage
 
@@ -84,6 +87,7 @@ class VehicleAdminWorklistSerializer(serializers.ModelSerializer):
     brand_name = serializers.CharField(source='brand.name', read_only=True)
     primary_image = serializers.SerializerMethodField()
     images = VehicleImageSerializer(many=True, read_only=True)
+    variants = VehicleVariantSerializer(many=True, read_only=True)
 
     class Meta:
         model = Vehicle
@@ -92,7 +96,7 @@ class VehicleAdminWorklistSerializer(serializers.ModelSerializer):
             'ev_hybrid_cng_flag', 'starting_price', 'top_variant_price', 'ex_showroom_price',
             'seats', 'transmission', 'key_specs', 'description', 'needs_review', 'is_active',
             'is_featured', 'is_tba', 'data_source', 'created_at', 'primary_image', 'images',
-            'meta_title', 'meta_description',
+            'variants', 'meta_title', 'meta_description',
         ]
 
     def get_primary_image(self, obj):
@@ -108,6 +112,24 @@ class VehicleAdminWorklistSerializer(serializers.ModelSerializer):
         if request is not None:
             return request.build_absolute_uri(image_url)
         return image_url
+
+
+def _get_or_create_brand_safe(brand_name_input):
+    if not brand_name_input or not str(brand_name_input).strip():
+        return None
+    b_name = str(brand_name_input).strip()
+    existing = Brand.objects.filter(name__iexact=b_name).first()
+    if existing:
+        return existing
+
+    from django.utils.text import slugify
+    base_slug = slugify(b_name)
+    slug = base_slug
+    counter = 1
+    while Brand.objects.filter(slug=slug).exists():
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    return Brand.objects.create(name=b_name.title(), slug=slug)
 
 
 class VehicleAdminCreateSerializer(serializers.ModelSerializer):
@@ -151,7 +173,7 @@ class VehicleAdminCreateSerializer(serializers.ModelSerializer):
             'interior': validated_data.pop('interior_image', None),
             'rear': validated_data.pop('rear_image', None),
         }
-        brand, _ = Brand.objects.get_or_create(name=brand_name)
+        brand = _get_or_create_brand_safe(brand_name)
 
         vehicle = Vehicle.objects.create(
             brand=brand,
@@ -185,6 +207,7 @@ class VehicleAdminCreateSerializer(serializers.ModelSerializer):
 
 class VehicleAdminUpdateSerializer(serializers.ModelSerializer):
     brand_name = serializers.CharField(max_length=100, write_only=True, required=False)
+    variants_json = serializers.JSONField(write_only=True, required=False)
     primary_image = serializers.ImageField(write_only=True, required=False, allow_null=True)
     front_image = serializers.ImageField(write_only=True, required=False, allow_null=True)
     exterior_image = serializers.ImageField(write_only=True, required=False, allow_null=True)
@@ -198,15 +221,57 @@ class VehicleAdminUpdateSerializer(serializers.ModelSerializer):
             'ev_hybrid_cng_flag', 'starting_price', 'top_variant_price',
             'ex_showroom_price', 'seats', 'transmission', 'key_specs',
             'description', 'is_featured', 'is_tba', 'is_active', 'meta_title',
-            'meta_description', 'primary_image', 'front_image', 'exterior_image',
+            'meta_description', 'variants_json', 'primary_image', 'front_image', 'exterior_image',
             'interior_image', 'rear_image',
         ]
 
+    def validate_variants_json(self, variants):
+        if not isinstance(variants, list):
+            raise serializers.ValidationError('Expected a list of variants.')
+
+        existing_ids = set(self.instance.variants.values_list('id', flat=True))
+        for index, item in enumerate(variants):
+            if not isinstance(item, dict):
+                raise serializers.ValidationError(f'Variant {index + 1} must be an object.')
+
+            variant_id = item.get('id')
+            if variant_id is not None:
+                try:
+                    variant_id = int(variant_id)
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError(f'Variant {index + 1} has an invalid id.')
+                if variant_id not in existing_ids:
+                    raise serializers.ValidationError(f'Variant {index + 1} does not belong to this vehicle.')
+                item['id'] = variant_id
+
+            if item.get('delete'):
+                continue
+
+            name = str(item.get('variant_name') or '').strip()
+            if not name:
+                raise serializers.ValidationError(f'Variant {index + 1} needs a name.')
+
+            try:
+                price = Decimal(str(item.get('ex_showroom_price')))
+            except (InvalidOperation, TypeError, ValueError):
+                raise serializers.ValidationError(f'Variant {index + 1} needs a valid ex-showroom price.')
+            if not price.is_finite() or price <= 0:
+                raise serializers.ValidationError(f'Variant {index + 1} needs a price greater than zero.')
+
+            item['variant_name'] = name
+            item['ex_showroom_price'] = price
+            item['fuel_type'] = str(item.get('fuel_type') or '').strip()
+            item['transmission'] = str(item.get('transmission') or '').strip()
+
+        return variants
+
+    @transaction.atomic
     def update(self, instance, validated_data):
         brand_name = validated_data.pop('brand_name', None)
         if brand_name:
-            brand, _ = Brand.objects.get_or_create(name=brand_name.strip())
-            instance.brand = brand
+            brand = _get_or_create_brand_safe(brand_name)
+            if brand:
+                instance.brand = brand
 
         primary_image = validated_data.pop('primary_image', None)
         uploaded_images = {
@@ -215,6 +280,12 @@ class VehicleAdminUpdateSerializer(serializers.ModelSerializer):
             'interior': validated_data.pop('interior_image', None),
             'rear': validated_data.pop('rear_image', None),
         }
+        variants = validated_data.pop('variants_json', None)
+
+        if 'starting_price' in validated_data:
+            validated_data['ex_showroom_price'] = validated_data['starting_price']
+        elif 'ex_showroom_price' in validated_data:
+            validated_data['starting_price'] = validated_data['ex_showroom_price']
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -251,6 +322,24 @@ class VehicleAdminUpdateSerializer(serializers.ModelSerializer):
                         alt_text=f"{instance.brand.name} {instance.name} {image_type} view",
                         is_primary=(image_type == 'front'),
                     )
+
+        if variants is not None:
+            for variant_data in variants:
+                variant_id = variant_data.get('id')
+                if variant_data.get('delete'):
+                    instance.variants.filter(id=variant_id).delete()
+                    continue
+
+                values = {
+                    'variant_name': variant_data['variant_name'],
+                    'ex_showroom_price': variant_data['ex_showroom_price'],
+                    'fuel_type': variant_data['fuel_type'] or instance.fuel_type or 'Petrol',
+                    'transmission': variant_data['transmission'] or instance.transmission or 'Manual',
+                }
+                if variant_id:
+                    instance.variants.filter(id=variant_id).update(**values)
+                else:
+                    VehicleVariant.objects.create(vehicle=instance, **values)
 
         return instance
 

@@ -82,7 +82,8 @@ SLAB_DATA = {
         ('diesel', 2000000, None, '0.1500', '0.0000', 0, 'Maharashtra Diesel Above 20L'),
     ],
     'KA': [
-        ('electric', 0, None, '0.0000', '0.0000', 0, 'Karnataka EV Tax Waiver'),
+        ('electric', 0, 2500000, '0.0000', '0.0000', 0, 'Karnataka EV Sub-25L Exemption'),
+        ('electric', 2500000, None, '0.1000', '0.1100', 0, 'Karnataka EV Above 25L (10% Road Tax + 11% Infra Cess)'),
         ('petrol', 0, 500000, '0.1300', '0.1100', 0, 'Karnataka Petrol Sub-5L (11% Infrastructure Cess on Tax)'),
         ('petrol', 500000, 1000000, '0.1400', '0.1100', 0, 'Karnataka Petrol 5L-10L'),
         ('petrol', 1000000, 2000000, '0.1700', '0.1100', 0, 'Karnataka Petrol 10L-20L'),
@@ -142,7 +143,7 @@ SLAB_DATA = {
         ('diesel', 2000000, None, '0.1400', '0.0000', 0, 'Haryana Diesel Above 20L'),
     ],
     'TN': [
-        ('electric', 0, None, '0.0000', '0.0000', 0, 'Tamil Nadu EV Exemption'),
+        ('electric', 0, None, '0.0500', '0.0000', 0, 'Tamil Nadu EV Policy 5% Road Tax'),
         ('petrol', 0, 500000, '0.1200', '0.0000', 0, 'Tamil Nadu Petrol Sub-5L'),
         ('petrol', 500000, 1000000, '0.1300', '0.0000', 0, 'Tamil Nadu Petrol 5L-10L'),
         ('petrol', 1000000, 2000000, '0.1500', '0.0000', 0, 'Tamil Nadu Petrol 10L-20L'),
@@ -333,6 +334,7 @@ class Command(BaseCommand):
                     existing = RoadTaxSlab.objects.filter(
                         state=state_obj,
                         fuel_type=fuel,
+                        ownership_type='all',
                         min_price=min_dec,
                         max_price=max_dec
                     ).first()

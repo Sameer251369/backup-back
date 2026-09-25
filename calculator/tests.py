@@ -131,6 +131,42 @@ class CalculatorAPITestCase(TestCase):
         self.assertIn('breakdown', response.data)
         self.assertEqual(response.data['breakdown']['ownership_type'], 'company')
 
+    def test_selected_variant_price_is_not_overridden_by_state_summary(self):
+        variant = VehicleVariant.objects.create(
+            vehicle=self.vehicle,
+            variant_name='SX',
+            ex_showroom_price=Decimal('1500000.00'),
+            fuel_type='petrol',
+        )
+        StateOnRoadPrice.objects.create(
+            car=self.vehicle,
+            state=self.state,
+            start_ex_showroom=1100000,
+            top_ex_showroom=1600000,
+            start_on_road=1300000,
+            top_on_road=1900000,
+        )
+
+        result = calculate_on_road_price(
+            self.vehicle,
+            self.state,
+            fuel_type='petrol',
+            variant=variant,
+        )
+
+        self.assertEqual(result['ex_showroom_price'], 1500000.0)
+
+    def test_calculator_seed_restores_nonzero_ev_tax_rate(self):
+        call_command('seed_tax_slabs_36', verbosity=0)
+
+        ev_slab = RoadTaxSlab.objects.get(
+            state=self.state,
+            fuel_type='electric',
+            ownership_type='all',
+        )
+
+        self.assertEqual(ev_slab.rate, Decimal('0.0600'))
+
     def test_bihar_on_road_price_all_fuels(self):
         bihar = State.objects.create(name="Bihar", code="BR", price_basis="ex_showroom", is_active=True)
         # Seed Bihar slabs

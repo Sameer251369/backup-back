@@ -228,7 +228,7 @@ def calculate_on_road_price(
                 note = "Custom price outside standard variant range"
     else:
         base_price = _get_base_ex_showroom(vehicle, variant=variant, variant_tier=variant_tier)
-        if row and row.start_ex_showroom:
+        if not variant and row and row.start_ex_showroom:
             if variant_tier == 'top' and row.top_ex_showroom:
                 base_price = Decimal(str(row.top_ex_showroom))
             elif row.start_ex_showroom:

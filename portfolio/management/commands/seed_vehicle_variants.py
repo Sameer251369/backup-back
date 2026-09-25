@@ -97,6 +97,10 @@ class Command(BaseCommand):
         updated_count = 0
 
         for v in vehicles:
+            # If vehicle already has variants (created or edited by admin), preserve them!
+            if v.variants.exists():
+                continue
+
             brand_name_lower = v.brand.name.strip().lower()
             start_price = float(v.starting_price or v.ex_showroom_price or 0)
             top_price = float(v.top_variant_price or v.starting_price or v.ex_showroom_price or 0)
@@ -171,12 +175,6 @@ class Command(BaseCommand):
 
                 if created:
                     created_count += 1
-                else:
-                    variant_obj.ex_showroom_price = Decimal(str(int(var_price)))
-                    variant_obj.fuel_type = var_fuel
-                    variant_obj.transmission = transmission
-                    variant_obj.save()
-                    updated_count += 1
 
         self.stdout.write(self.style.SUCCESS(
             f"Successfully completed variant seeding! Created: {created_count}, Updated: {updated_count}. Total Variants: {VehicleVariant.objects.count()}"
